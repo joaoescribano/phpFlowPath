@@ -34,6 +34,7 @@ class FlowPath {
     public $mapFlow;
     public $mapPath;
     public $mapPathSteps;
+    public $canWalkDiagonally;
 
     public $steps = 0;
 
@@ -44,13 +45,14 @@ class FlowPath {
     public $destination;
     public $reached = false;
 
-    public function __construct($map = []) {
+    public function __construct($map = [], $canWalkDiagonally = false) {
+        $this->canWalkDiagonally = $canWalkDiagonally;
         if (count($map) > 0) {
             $this->setMap($map);
         }
     }
 
-    private function getDirection($from = [], $destination = [], $checkFlow = false, $step = null) {
+    private function getDirection($from = [], $destination = [], $checkFlow = false, $step = null, $doNotTest = false) {
         $dir = (
             $destination[0] == $from[0] ?
             (
@@ -79,7 +81,7 @@ class FlowPath {
         );
 
         /* Test if can go to the desired direction */
-        if (!$this->canGoTo($from, $dir, $checkFlow, $step)) {
+        if (!$doNotTest && !$this->canGoTo($from, $dir, $checkFlow, $step)) {
             $dir = $this->getBestDirection($from, $dir, $checkFlow, $step);
         }
         return $dir;
@@ -135,9 +137,6 @@ class FlowPath {
 
         $this->calculateMapFlow();
         $this->calculateMapPath();
-        if ($this->mapPathSteps !== null) {
-            $this->mapPathSteps = array_reverse($this->mapPathSteps);
-        }
     }
 
     public function dumpFlow() {
@@ -237,7 +236,7 @@ class FlowPath {
         $this->getPathFromFlow();
     }
 
-    public function getPathFromFlow($from = null, $steps = null, $data = []) {
+    public function getPathFromFlow($from = null, $steps = null) {
         if ($from === null) {
             $from = $this->source;
         }
@@ -250,52 +249,69 @@ class FlowPath {
         $next = $this->getFlowNodeFrom($from, $dir);
 
         if ($next == $steps) {
-            $this->getPathFromFlow($this->getNodeDir($from, $dir), $steps - 1, $data);
-            $this->mapPathSteps[] = $this->getNodeDir($from, $dir);
+            $nDir = $this->getNodeDir($from, $dir);
+            $this->mapPathSteps[] = $nDir;
+            $this->getPathFromFlow($nDir, $steps - 1);
         }
-
-        return $data;
     }
 
     public function getNodeDir($from, $dir) {
         return $this->getAroundNodes($from)[$dir];
     }
 
-    public function calculateMapFlow($from = null, $actualStep = 1) {
+    public function calculateMapFlow($from = null) {
         if ($from === null) {
             $from = $this->destination;
         }
 
+        /* Creates the step one around destination */
         $nodes = $this->getAroundNodes($from);
-        $new   = false;
 
         foreach ($nodes as $dir => $node) {
-            if ($node[3] & FlowPath::TYPE_SOURCE) {
+            if ($node[3] == FlowPath::TYPE_SOURCE) {
                 $this->reached = true;
-                return;
+                continue;
             }
-
-            // if ($this->reached)
-            //     continue;
 
             if ($node[0] < 0 || $node[0] > $this->blockX || $node[1] < 0 || $node[1] > $this->blockY || $node[3] == FlowPath::TYPE_WALL) {
                 continue;
             }
 
-            if ($this->mapFlow[$node[1]][$node[0]] > $actualStep || $this->mapFlow[$node[1]][$node[0]] == FlowPath::TYPE_FREE) {
-                $this->mapFlow[$node[1]][$node[0]] = $actualStep;
-                $new                               = true;
+            if ($this->mapFlow[$node[1]][$node[0]] > 1 || $this->mapFlow[$node[1]][$node[0]] == FlowPath::TYPE_FREE) {
+                $this->mapFlow[$node[1]][$node[0]] = 1;
             }
         }
 
-        if ($new) {
-            foreach ($this->getNodeStep($actualStep) as $node) {
-                if ($node[0] < 0 || $node[0] > $this->blockX || $node[1] < 0 || $node[1] > $this->blockY) {
+        $this->doMapFlow(2);
+    }
+
+    public function doMapFlow($actualStep = 1) {
+        foreach ($this->getNodeStep($actualStep-1) as $node) {
+            if ($node[0] < 0 || $node[0] > $this->blockX || $node[1] < 0 || $node[1] > $this->blockY) {
+                continue;
+            }
+
+            $nodes = $this->getAroundNodes($node);
+
+            foreach ($nodes as $dir => $node) {
+                if ($node[3] & FlowPath::TYPE_SOURCE) {
+                    $this->reached = true;
                     continue;
                 }
 
-                $this->calculateMapFlow($node, ($actualStep + 1));
+                if ($node[0] < 0 || $node[0] > $this->blockX || $node[1] < 0 || $node[1] > $this->blockY || $node[3] == FlowPath::TYPE_WALL) {
+                    continue;
+                }
+
+                if ($this->mapFlow[$node[1]][$node[0]] > $actualStep || $this->mapFlow[$node[1]][$node[0]] == FlowPath::TYPE_FREE) {
+                    $this->mapFlow[$node[1]][$node[0]] = $actualStep;
+                    $new                               = true;
+                }
             }
+        }
+
+        if (!$this->reached) {
+            $this->doMapFlow($actualStep+1);
         }
     }
 
@@ -308,7 +324,6 @@ class FlowPath {
                 }
             }
         }
-
         return $ret;
     }
 
@@ -335,21 +350,83 @@ class FlowPath {
     public function getNodeFrom($from = [], $direction) {
         switch ($direction) {
             case self::DIR_NORTH:
+                if (!isset($this->map[($from[1] - 1)]) || !isset($this->map[($from[0])])) {
+                    return FlowPath::TYPE_WALL;
+                }
+
                 return (isset($this->map[($from[1] - 1)][($from[0])]) ? $this->map[($from[1] - 1)][($from[0])] : FlowPath::TYPE_WALL);
             case self::DIR_NORTHEAST:
-                return (isset($this->map[($from[1] - 1)][($from[0] + 1)]) ? $this->map[($from[1] - 1)][($from[0] + 1)] : FlowPath::TYPE_WALL);
+                if (!isset($this->map[$from[1] - 1]) || !isset($this->map[$from[0] + 1])) {
+                    return FlowPath::TYPE_WALL;
+                }
+                $node = (isset($this->map[($from[1] - 1)][($from[0] + 1)]) ? ($this->canWalkDiagonally ? $this->map[($from[1] - 1)][($from[0] + 1)] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+
+                $test1 = (isset($this->map[($from[1] - 1)][($from[0])]) ? ($this->canWalkDiagonally ? $this->map[($from[1] - 1)][($from[0])] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+                $test2 = (isset($this->map[($from[1])][($from[0] + 1)]) ? ($this->canWalkDiagonally ? $this->map[($from[1])][($from[0] + 1)] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+
+                if ($test1 == 0 && $test2 == 0) {
+                    return $node;
+                } else {
+                    return FlowPath::TYPE_WALL;
+                }
             case self::DIR_EAST:
+                if (!isset($this->map[$from[1]]) || !isset($this->map[$from[0] + 1])) {
+                    return FlowPath::TYPE_WALL;
+                }
                 return (isset($this->map[($from[1])][($from[0] + 1)]) ? $this->map[($from[1])][($from[0] + 1)] : FlowPath::TYPE_WALL);
             case self::DIR_SOUTHEAST:
-                return (isset($this->map[($from[1] + 1)][($from[0] + 1)]) ? $this->map[($from[1] + 1)][($from[0] + 1)] : FlowPath::TYPE_WALL);
+                if (!isset($this->map[$from[1] + 1]) || !isset($this->map[$from[0] + 1])) {
+                    return FlowPath::TYPE_WALL;
+                }
+                $node = (isset($this->map[($from[1] + 1)][($from[0] + 1)]) ? ($this->canWalkDiagonally ? $this->map[($from[1] + 1)][($from[0] + 1)] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+
+                $test1 = (isset($this->map[($from[1])][($from[0] + 1)]) ? ($this->canWalkDiagonally ? $this->map[($from[1])][($from[0] + 1)] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+                $test2 = (isset($this->map[($from[1] + 1)][($from[0])]) ? ($this->canWalkDiagonally ? $this->map[($from[1] + 1)][($from[0])] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+
+                if ($test1 == 0 && $test2 == 0) {
+                    return $node;
+                } else {
+                    return FlowPath::TYPE_WALL;
+                }
+
             case self::DIR_SOUTH:
+                if (!isset($this->map[$from[1] + 1]) || !isset($this->map[$from[0]])) {
+                    return FlowPath::TYPE_WALL;
+                }
                 return (isset($this->map[($from[1] + 1)][($from[0])]) ? $this->map[($from[1] + 1)][($from[0])] : FlowPath::TYPE_WALL);
             case self::DIR_SOUTHWEST:
-                return (isset($this->map[($from[1] + 1)][($from[0] - 1)]) ? $this->map[($from[1] + 1)][($from[0] - 1)] : FlowPath::TYPE_WALL);
+                if (!isset($this->map[$from[1] + 1]) || !isset($this->map[$from[0] - 1])) {
+                    return FlowPath::TYPE_WALL;
+                }
+                $node = (isset($this->map[($from[1] + 1)][($from[0] - 1)]) ? ($this->canWalkDiagonally ? $this->map[($from[1] + 1)][($from[0] - 1)] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+
+                $test1 = (isset($this->map[($from[1])][($from[0] - 1)]) ? ($this->canWalkDiagonally ? $this->map[($from[1])][($from[0] - 1)] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+                $test2 = (isset($this->map[($from[1] + 1)][($from[0])]) ? ($this->canWalkDiagonally ? $this->map[($from[1] + 1)][($from[0])] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+
+                if ($test1 == 0 && $test2 == 0) {
+                    return $node;
+                } else {
+                    return FlowPath::TYPE_WALL;
+                }
             case self::DIR_WEST:
+                if (!isset($this->map[$from[1]]) || !isset($this->map[$from[0] - 1])) {
+                    return FlowPath::TYPE_WALL;
+                }
                 return (isset($this->map[($from[1])][($from[0] - 1)]) ? $this->map[($from[1])][($from[0] - 1)] : FlowPath::TYPE_WALL);
             case self::DIR_NORTHWEST:
-                return (isset($this->map[($from[1] - 1)][($from[0] - 1)]) ? $this->map[($from[1] - 1)][($from[0] - 1)] : FlowPath::TYPE_WALL);
+                if (!isset($this->map[$from[1] - 1]) || !isset($this->map[$from[0] - 1])) {
+                    return FlowPath::TYPE_WALL;
+                }
+                $node = (isset($this->map[($from[1] - 1)][($from[0] - 1)]) ? ($this->canWalkDiagonally ? $this->map[($from[1] - 1)][($from[0] - 1)] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+
+                $test1 = (isset($this->map[($from[1] - 1)][($from[0])]) ? ($this->canWalkDiagonally ? $this->map[($from[1] - 1)][($from[0])] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+                $test2 = (isset($this->map[($from[1])][($from[0] - 1)]) ? ($this->canWalkDiagonally ? $this->map[($from[1])][($from[0] - 1)] : FlowPath::TYPE_WALL) : FlowPath::TYPE_WALL);
+
+                if ($test1 == 0 && $test2 == 0) {
+                    return $node;
+                } else {
+                    return FlowPath::TYPE_WALL;
+                }
             default:
                 return false;
         }
@@ -373,19 +450,82 @@ class FlowPath {
             case self::DIR_NORTH:
                 return (isset($this->mapFlow[($from[1] - 1)][($from[0])]) ? $this->mapFlow[($from[1] - 1)][($from[0])] : -1);
             case self::DIR_NORTHEAST:
-                return (isset($this->mapFlow[($from[1] - 1)][($from[0] + 1)]) ? $this->mapFlow[($from[1] - 1)][($from[0] + 1)] : -1);
+                $node = (isset($this->mapFlow[($from[1] - 1)][($from[0] + 1)]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1] - 1)][($from[0] + 1)] : -1) : -1);
+
+                if (!isset($this->mapFlow[($from[1] - 1)]) || !isset($this->mapFlow[$from[0]])) {
+                    return -1;
+                }
+                if (!isset($this->mapFlow[($from[1])]) || !isset($this->mapFlow[$from[0] + 1])) {
+                    return -1;
+                }
+
+                $test1 = (isset($this->mapFlow[($from[1] - 1)][($from[0])]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1] - 1)][($from[0])] : -1) : -1);
+                $test2 = (isset($this->mapFlow[($from[1])][($from[0] + 1)]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1])][($from[0] + 1)] : -1) : -1);
+
+                if ($node != -1 && $test1 != -1 && $test2 != -1) {
+                    return $node;
+                } else {
+                    return -1;
+                }
             case self::DIR_EAST:
                 return (isset($this->mapFlow[($from[1])][($from[0] + 1)]) ? $this->mapFlow[($from[1])][($from[0] + 1)] : -1);
             case self::DIR_SOUTHEAST:
-                return (isset($this->mapFlow[($from[1] + 1)][($from[0] + 1)]) ? $this->mapFlow[($from[1] + 1)][($from[0] + 1)] : -1);
+                $node = (isset($this->mapFlow[($from[1] + 1)][($from[0] + 1)]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1] + 1)][($from[0] + 1)] : -1) : -1);
+
+                if (!isset($this->mapFlow[($from[1])]) || !isset($this->mapFlow[$from[0] + 1])) {
+                    return -1;
+                }
+                if (!isset($this->mapFlow[($from[1] + 1)]) || !isset($this->mapFlow[$from[0]])) {
+                    return -1;
+                }
+
+                $test1 = (isset($this->mapFlow[($from[1])][($from[0] + 1)]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1])][($from[0] + 1)] : -1) : -1);
+                $test2 = (isset($this->mapFlow[($from[1] + 1)][($from[0])]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1] + 1)][($from[0])] : -1) : -1);
+
+                if ($node != -1 && $test1 != -1 && $test2 != -1) {
+                    return $node;
+                } else {
+                    return -1;
+                }
             case self::DIR_SOUTH:
                 return (isset($this->mapFlow[($from[1] + 1)][($from[0])]) ? $this->mapFlow[($from[1] + 1)][($from[0])] : -1);
             case self::DIR_SOUTHWEST:
-                return (isset($this->mapFlow[($from[1] + 1)][($from[0] - 1)]) ? $this->mapFlow[($from[1] + 1)][($from[0] - 1)] : -1);
+                $node = (isset($this->mapFlow[($from[1] + 1)][($from[0] - 1)]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1] + 1)][($from[0] - 1)] : -1) : -1);
+
+                if (!isset($this->mapFlow[($from[1])]) || !isset($this->mapFlow[$from[0] - 1])) {
+                    return -1;
+                }
+                if (!isset($this->mapFlow[($from[1] + 1)]) || !isset($this->mapFlow[$from[0]])) {
+                    return -1;
+                }
+
+                $test1 = (isset($this->mapFlow[($from[1])][($from[0] - 1)]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1])][($from[0] - 1)] : -1) : -1);
+                $test2 = (isset($this->mapFlow[($from[1] + 1)][($from[0])]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1] + 1)][($from[0])] : -1) : -1);
+
+                if ($node != -1 && $test1 != -1 && $test2 != -1) {
+                    return $node;
+                } else {
+                    return -1;
+                }
             case self::DIR_WEST:
                 return (isset($this->mapFlow[($from[1])][($from[0] - 1)]) ? $this->mapFlow[($from[1])][($from[0] - 1)] : -1);
             case self::DIR_NORTHWEST:
-                return (isset($this->mapFlow[($from[1] - 1)][($from[0] - 1)]) ? $this->mapFlow[($from[1] - 1)][($from[0] - 1)] : -1);
+                $node = (isset($this->mapFlow[($from[1] - 1)][($from[0] - 1)]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1] - 1)][($from[0] - 1)] : -1) : -1);
+
+                if (!isset($this->mapFlow[($from[1] - 1)]) || !isset($this->mapFlow[$from[0]])) {
+                    return -1;
+                }
+                if (!isset($this->mapFlow[($from[1])]) || !isset($this->mapFlow[$from[0] -1])) {
+                    return -1;
+                }
+                $test1 = (isset($this->mapFlow[($from[1] - 1)][($from[0])]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1] - 1)][($from[0])] : -1) : -1);
+                $test2 = (isset($this->mapFlow[($from[1])][($from[0] - 1)]) ? ($this->canWalkDiagonally ? $this->mapFlow[($from[1])][($from[0] - 1)] : -1) : -1);
+
+                if ($node != -1 && $test1 != -1 && $test2 != -1) {
+                    return $node;
+                } else {
+                    return -1;
+                }
             default:
                 return false;
         }
