@@ -286,6 +286,7 @@ class FlowPath {
     }
 
     public function doMapFlow($actualStep = 1) {
+        $new = false;
         foreach ($this->getNodeStep($actualStep-1) as $node) {
             if ($node[0] < 0 || $node[0] > $this->blockX || $node[1] < 0 || $node[1] > $this->blockY) {
                 continue;
@@ -310,7 +311,7 @@ class FlowPath {
             }
         }
 
-        if (!$this->reached) {
+        if ($new && !$this->reached) {
             $this->doMapFlow($actualStep+1);
         }
     }
